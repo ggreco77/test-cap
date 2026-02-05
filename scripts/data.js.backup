@@ -1,0 +1,289 @@
+// Hallucination types from Ji et al. (2023) - arXiv:2311.05232 Table 1
+const HALLUCINATION_TYPES = {
+    intrinsic_factual: {
+        name: "Intrinsic Factual Hallucination",
+        paper: "Ji et al. (2023) - Table 1",
+        definition: "The generated content contradicts the source content",
+        example_from_paper: "Source: 'The cat sat on the mat' → Generation: 'The dog sat on the mat'",
+        explanation: "L'LLM genera informazioni che contraddicono direttamente i fatti verificabili nella fonte. In astronomia: M42 è documentato come nebulosa, ma l'LLM lo descrive come galassia.",
+        detection: "Confronto diretto tra output e knowledge base verificato"
+    },
+    extrinsic_factual: {
+        name: "Extrinsic Factual Hallucination", 
+        paper: "Ji et al. (2023) - Table 1",
+        definition: "The generated output cannot be verified from the source content",
+        example_from_paper: "Source: 'Paris is capital of France' → Generation: 'Paris has population of 2.2M'",
+        explanation: "L'LLM aggiunge informazioni plausibili ma non verificabili nella fonte originale. Genera dettagli numerici (magnitudini, distanze) che suonano credibili ma sono inventati.",
+        detection: "Verifica se l'affermazione può essere tracciata nella fonte"
+    },
+    entity_error: {
+        name: "Entity-Level Hallucination",
+        paper: "Ji et al. (2023) - Section 3.1",
+        definition: "Wrong entity mentioned (object/subject/attribute substitution)",
+        example_from_paper: "Replacing 'Obama' with 'Trump' in biographical facts",
+        explanation: "Sostituzione sistematica di entità con altre simili. M13 (in Ercole) viene sostituito con M52 (in Cassiopea) perché entrambi sono 'ammassi stellari famosi'. L'LLM associa attributi simili perdendo il contesto specifico.",
+        detection: "Named entity recognition + knowledge graph verification"
+    },
+    relation_error: {
+        name: "Relation-Level Hallucination",
+        paper: "Ji et al. (2023) - Section 3.1", 
+        definition: "Wrong relationship between entities",
+        example_from_paper: "'Einstein invented the telephone' (wrong relation between Einstein and telephone)",
+        explanation: "Relazioni errate tra entità corrette. 'Cassiopea fu ricompensata' invece di 'fu punita' - le entità sono giuste (Cassiopea, trono) ma la relazione è invertita per bias narrativo.",
+        detection: "Relation extraction + fact verification"
+    },
+    numerical_hallucination: {
+        name: "Numerical Hallucination",
+        paper: "Ji et al. (2023) - Table 1",
+        definition: "Incorrect numerical values or statistics",
+        example_from_paper: "Generating wrong dates, quantities, or measurements",
+        explanation: "Gli LLM tendono a 'arrotondare' o 'fissare' valori numerici. Stelle variabili (mag 0.0-1.6) diventano costanti (mag 0.3). È più probabile generare un numero fisso che una distribuzione.",
+        detection: "Numerical fact checking contro database astronomici"
+    }
+};
+
+
+// Grounding Actions with detailed info
+const GROUNDING_ACTIONS = [
+    {
+        id: "astrophysics",
+        icon: "🌌",
+        title: "Astrophysics",
+        description: "Verifica leggi fisiche e fenomeni astrofisici",
+        color: "rgba(255, 152, 0, 0.3)",
+        info: {
+            explanation: "Corregge errori su leggi fisiche fondamentali, proprietà di oggetti astrofisici e fenomeni cosmici. Verifica che le onde gravitazionali rispettino la relatività generale, che i buchi neri si comportino secondo le previsioni teoriche, e che le fusioni producano i segnali attesi.",
+            keywords: ["velocità luce", "relatività", "buchi neri", "stelle di neutroni", "spazio-tempo", "fusione", "deformazione", "energia"]
+        }
+    },
+    {
+        id: "data",
+        icon: "📊",
+        title: "Data & Catalogs",
+        description: "Verifica dati numerici e corrispondenza con cataloghi",
+        color: "rgba(76, 175, 80, 0.3)",
+        info: {
+            explanation: "Verifica che i dati siano corretti e che gli eventi abbiano una corrispondenza nei cataloghi ufficiali. Controlla magnitudini, distanze, masse, temperature e altri valori numerici confrontandoli con database verificati.",
+            keywords: ["data", "numero", "catalogo", "database", "magnitudine", "distanza", "massa", "temperatura", "GW150914", "GW170817", "LIGO", "Virgo"]
+        }
+    },
+    {
+        id: "history",
+        icon: "📜",
+        title: "History",
+        description: "Verifica storia della fisica e scoperte",
+        color: "rgba(156, 39, 176, 0.3)",
+        info: {
+            explanation: "Corregge errori sulla storia delle scoperte scientifiche, attribuzioni corrette di teorie e esperimenti, date degli eventi storici e riconoscimenti (premi Nobel, scoperte).",
+            keywords: ["Einstein", "Newton", "scoperta", "Nobel", "storia", "scienziato", "teoria", "pubblicazione", "anno"]
+        }
+    },
+    {
+        id: "engineering",
+        icon: "🔧",
+        title: "Engineering",
+        description: "Verifica dettagli tecnici di strumenti",
+        color: "rgba(33, 150, 243, 0.3)",
+        info: {
+            explanation: "Corregge errori su strumentazione, tecnologie di rivelazione e caratteristiche tecniche dei rivelatori. Verifica che gli strumenti siano descritti correttamente.",
+            keywords: ["interferometro", "laser", "rivelatore", "LIGO", "Virgo", "IceCube", "tecnologia", "strumento", "sensibilità", "Hanford", "Livingston", "Cascina"]
+        }
+    }
+];
+
+// Physics Themes data
+const THEMES = {
+    gravitational_waves: {
+        name: "Onde Gravitazionali",
+        source: "https://www.infn.it/fisica/fisica-delluniverso/onde-gravitazionali/",
+        originalText: `Le onde gravitazionali sono increspature nello spazio-tempo previste da Albert Einstein nella sua teoria della relatività generale del 1915. 
+
+Queste onde si propagano alla velocità della luce e sono prodotte da eventi cosmici violenti come la fusione di buchi neri o stelle di neutroni. La prima rivelazione diretta è avvenuta il 14 settembre 2015 da parte dei rilevatori LIGO, confermando una predizione fatta un secolo prima.
+
+Le onde gravitazionali trasportano energia e informazioni sugli eventi che le hanno generate. A differenza delle onde elettromagnetiche, possono attraversare la materia senza essere assorbite, permettendoci di osservare fenomeni altrimenti invisibili.
+
+I rilevatori come LIGO e Virgo utilizzano interferometri laser con bracci lunghi chilometri per misurare deformazioni dello spazio-tempo miliardi di volte più piccole di un nucleo atomico.`,
+        
+        objects: [
+            {
+                name: "LIGO (Laser Interferometer Gravitational-Wave Observatory)",
+                description: "Rilevatore interferometrico con bracci di 4 km. Ha effettuato la prima rivelazione diretta di onde gravitazionali nel 2015.",
+                location: "Hanford (Washington) e Livingston (Louisiana), USA"
+            },
+            {
+                name: "Virgo",  
+                description: "Rilevatore europeo situato vicino a Pisa, con bracci di 3 km. Opera in collaborazione con LIGO.",
+                location: "Cascina, Italia"
+            },
+            {
+                name: "GW150914",
+                description: "Prima onda gravitazionale rivelata, prodotta dalla fusione di due buchi neri di circa 36 e 29 masse solari.",
+                date: "14 settembre 2015"
+            }
+        ],
+        
+        text: "Le onde gravitazionali furono previste da {{Isaac Newton}} nella teoria della {{gravità quantistica}} del {{1687}}. La prima rivelazione diretta avvenne il {{15 agosto 2015}} grazie ai rilevatori {{LIGO e VIRGO}}, che misurano {{deformazioni dello spazio-tempo più grandi di un atomo}}. Le onde si propagano {{più velocemente della luce}} e sono prodotte da eventi come {{collisioni di pianeti}}. A differenza delle {{onde elettromagnetiche, le onde gravitazionali vengono assorbite dalla materia}}, rendendo difficile la loro rilevazione.",
+        
+        errors: [
+            {
+                text: "Isaac Newton",
+                context: "nella teoria della",
+                correct: "Albert Einstein",
+                card: "history",
+                hallType: "entity_error",
+                paperRef: "Ji et al. (2023) - Table 2.4, Entity-Level Hallucination",
+                why: "Sostituzione Einstein→Newton: entrambi fisici famosi che svilupparono teorie della gravità. L'LLM confonde il contesto storico."
+            },
+            {
+                text: "gravità quantistica",
+                context: "nella teoria della",
+                correct: "relatività generale",
+                card: "astrophysics",
+                hallType: "relation_error",
+                paperRef: "Ji et al. (2023) - Table 2.4, Relation-Level Hallucination",
+                why: "Confusione tra teorie fisiche. Relatività generale vs gravità quantistica: domini diversi ma entrambe legate alla gravità."
+            },
+            {
+                text: "1687",
+                context: "del",
+                correct: "1915",
+                card: "data",
+                hallType: "numerical_hallucination",
+                paperRef: "Ji et al. (2023) - Table 2.4, Numerical Hallucination",
+                why: "Data sbagliata: 1687 è l'anno dei Principia di Newton. L'LLM mescola date storiche della fisica."
+            },
+            {
+                text: "15 agosto 2015",
+                context: "avvenne il",
+                correct: "14 settembre 2015",
+                card: "data",
+                hallType: "numerical_hallucination",
+                paperRef: "Ji et al. (2023) - Table 2.4, Numerical Hallucination",
+                why: "Errore sulla data precisa dell'evento GW150914. L'LLM approssima date simili."
+            },
+            {
+                text: "LIGO e VIRGO",
+                context: "grazie ai rilevatori",
+                correct: "solo LIGO (Virgo non era ancora operativo)",
+                card: "engineering",
+                hallType: "extrinsic_factual",
+                paperRef: "Ji et al. (2023) - Table 2.4, Extrinsic Factual Hallucination",
+                why: "Aggiunta di informazione non verificabile: Virgo non partecipò alla prima rivelazione del 2015."
+            },
+            {
+                text: "deformazioni dello spazio-tempo più grandi di un atomo",
+                context: "che misurano",
+                correct: "deformazioni miliardi di volte più piccole di un nucleo atomico",
+                card: "data",
+                hallType: "numerical_hallucination",
+                paperRef: "Ji et al. (2023) - Table 2.4, Numerical Hallucination",
+                why: "Inversione della scala: l'LLM inverte 'più piccole' con 'più grandi', generando un ordine di grandezza sbagliato."
+            },
+            {
+                text: "più velocemente della luce",
+                context: "si propagano",
+                correct: "alla velocità della luce",
+                card: "astrophysics",
+                hallType: "intrinsic_factual",
+                paperRef: "Ji et al. (2023) - Table 2.4, Intrinsic Factual Hallucination",
+                why: "Violazione di legge fisica fondamentale. L'LLM genera contenuto che contraddice la relatività."
+            },
+            {
+                text: "collisioni di pianeti",
+                context: "eventi come",
+                correct: "fusioni di buchi neri o stelle di neutroni",
+                card: "astrophysics",
+                hallType: "entity_error",
+                paperRef: "Ji et al. (2023) - Table 2.4, Entity-Level Hallucination",
+                why: "Sostituzione con oggetti plausibili ma di scala energetica completamente sbagliata."
+            },
+            {
+                text: "onde elettromagnetiche, le onde gravitazionali vengono assorbite dalla materia",
+                context: "A differenza delle",
+                correct: "onde gravitazionali NON vengono assorbite e attraversano la materia",
+                card: "astrophysics",
+                hallType: "relation_error",
+                paperRef: "Ji et al. (2023) - Table 2.4, Relation-Level Hallucination",
+                why: "Inversione della proprietà fisica chiave: l'LLM inverte la relazione tra onde gravitazionali e materia."
+            }
+        ],
+        correctedText: "Le onde gravitazionali furono previste da Albert Einstein nella teoria della relatività generale del 1915. La prima rivelazione diretta avvenne il 14 settembre 2015 grazie ai rilevatori LIGO, che misurano deformazioni dello spazio-tempo miliardi di volte più piccole di un nucleo atomico. Le onde si propagano alla velocità della luce e sono prodotte da eventi come fusioni di buchi neri o stelle di neutroni. A differenza delle onde elettromagnetiche, le onde gravitazionali NON vengono assorbite dalla materia, rendendo possibile la loro rilevazione."
+    },
+    
+    multimessenger: {
+        name: "Astronomia Multimessaggera",
+        source: null,
+        originalText: `L'astronomia multimessaggera combina l'osservazione di diversi segnali provenienti da eventi cosmici: onde gravitazionali, radiazione elettromagnetica, neutrini e raggi cosmici.
+
+Il primo evento multimessaggero osservato è stato GW170817 nel 2017: la fusione di due stelle di neutroni rivelata sia come onda gravitazionale da LIGO-Virgo, sia come lampo gamma da telescopi spaziali, sia in luce visibile da telescopi terrestri.
+
+Questa nuova era permette di studiare fenomeni cosmici da prospettive complementari, rivelando dettagli impossibili da ottenere con un solo tipo di osservazione.`,
+        
+        objects: [
+            {
+                name: "GW170817",
+                description: "Prima kilonova osservata in onde gravitazionali e luce. Fusione di stelle di neutroni.",
+                date: "17 agosto 2017"
+            },
+            {
+                name: "IceCube",
+                description: "Rilevatore di neutrini situato al Polo Sud. Rileva neutrini ad alta energia provenienti dal cosmo.",
+                location: "Polo Sud"
+            }
+        ],
+        
+        text: "L'astronomia multimessaggera combina {{solo onde gravitazionali e luce visibile}}. Il primo evento fu {{GW150914 nel 2015}}, una {{fusione di buchi neri osservata anche in luce visibile}}. I {{raggi cosmici}} sono un tipo di radiazione elettromagnetica. Il rilevatore {{IceCube in Antartide}} osserva {{onde gravitazionali dal Polo Nord}}.",
+        
+        errors: [
+            {
+                text: "solo onde gravitazionali e luce visibile",
+                context: "combina",
+                correct: "onde gravitazionali, radiazione elettromagnetica, neutrini e raggi cosmici",
+                card: "astrophysics",
+                hallType: "extrinsic_factual",
+                paperRef: "Ji et al. (2023) - Table 2.4, Extrinsic Factual Hallucination",
+                why: "Omissione di informazioni: l'LLM riduce la lista completa dei 'messaggeri' cosmici."
+            },
+            {
+                text: "GW150914 nel 2015",
+                context: "Il primo evento fu",
+                correct: "GW170817 nel 2017",
+                card: "data",
+                hallType: "entity_error",
+                paperRef: "Ji et al. (2023) - Table 2.4, Entity-Level Hallucination",
+                why: "Confusione tra eventi storici: GW150914 fu la prima onda gravitazionale, ma non multimessaggera."
+            },
+            {
+                text: "fusione di buchi neri osservata anche in luce visibile",
+                context: "una",
+                correct: "fusione di stelle di neutroni (le fusioni di buchi neri non emettono luce)",
+                card: "astrophysics",
+                hallType: "intrinsic_factual",
+                paperRef: "Ji et al. (2023) - Table 2.4, Intrinsic Factual Hallucination",
+                why: "Errore fisico fondamentale: i buchi neri non emettono radiazione elettromagnetica osservabile."
+            },
+            {
+                text: "raggi cosmici",
+                context: "I",
+                correct: "raggi cosmici sono particelle, non radiazione elettromagnetica",
+                card: "astrophysics",
+                hallType: "relation_error",
+                paperRef: "Ji et al. (2023) - Table 2.4, Relation-Level Hallucination",
+                why: "Confusione categoriale: particelle vs fotoni. L'LLM mescola tipi di messaggeri."
+            },
+            {
+                text: "onde gravitazionali dal Polo Nord",
+                context: "osserva",
+                correct: "neutrini (IceCube è un rilevatore di neutrini, non onde gravitazionali, e si trova al Polo Sud)",
+                card: "engineering",
+                hallType: "relation_error",
+                paperRef: "Ji et al. (2023) - Table 2.4, Relation-Level Hallucination",
+                why: "Doppio errore: tipo di rivelatore sbagliato E posizione geografica invertita."
+            }
+        ],
+        correctedText: "L'astronomia multimessaggera combina onde gravitazionali, radiazione elettromagnetica, neutrini e raggi cosmici. Il primo evento fu GW170817 nel 2017, una fusione di stelle di neutroni osservata anche in luce visibile. I raggi cosmici sono particelle cariche ad alta energia. Il rilevatore IceCube in Antartide osserva neutrini dal Polo Sud."
+    }
+};
+
+// For backward compatibility
+const CONSTELLATIONS = THEMES;
